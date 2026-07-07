@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- PUBLIC IMAGE BUILD: compiles the harness contract ONLY. The submitted
+       container is publicly pullable and .NET IL decompiles trivially, so this
+       explicit list IS the disclosure boundary. Add a file here only if it must
+       execute at evaluation time. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12</LangVersion>
+    <AssemblyName>act2-agent</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/HarnessProgram.cs" />
+    <Compile Include="src/Harness.cs" />
+    <Compile Include="src/Fireworks.cs" />
+    <Compile Include="src/Backend.cs" />
+    <Compile Include="src/Records.cs" />
+  </ItemGroup>
+</Project>
