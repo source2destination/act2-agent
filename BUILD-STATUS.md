@@ -1,17 +1,25 @@
-# Build status
+# Build status — verified record
 
-## Completed
+Final image: `ghcr.io/source2destination/act2-agent:v3`
+Digest: `sha256:ff72e50fa8349cfb26f84147c70084ac0c4c1f323b41e077601ab9a4c6b57245`
+Frozen: 2026-07-12, ahead of the Track 1 deadline. No further pushes.
 
-- Peak source changes applied to the public harness copy.
-- New source files are explicitly included in the public `.csproj` disclosure boundary.
-- Both Docker build COPY lists include every new source file.
-- `zero/Dockerfile.zero` enables deterministic/local-first Peak routing.
-- Python AST validation is available in the zero image through `python3-minimal`.
-- Static source audit passes.
-- A PowerShell build/self-test/smoke script is included.
+## Gates cleared by this exact source tree
 
-## Environment limitation
+| Gate | Result |
+|---|---|
+| `dotnet publish` (Release) | clean, 0 warnings / 0 errors |
+| Self-test suite | 22/22 |
+| Organizer retired validation set | 10/10 (content-graded against published criteria) |
+| Generated regression pool (seed 909, 64 tasks) | 64/64 |
+| Fresh-seed pools (1337 + 2607, 160 tasks each, seeds unseen during tuning) | 320/320 |
+| Dead-proxy degradation (remote unreachable) | 64/64 task IDs, valid JSON, zero blanks, 103s |
+| Registry pull-back (exact GHCR digest, 2 vCPU / 4 GB) | retired set 10/10 |
 
-The current artifact runtime does not contain the .NET SDK or Docker CLI, so compilation and container execution could not be performed here. No claim is made that the C# build or Docker smoke gate passed in this environment.
+Static source audit: `artifacts/static-audit.log`.
+File integrity: `FILE-MANIFEST.sha256` (SHA-256 over every tracked file).
 
-Run `tests/Run-PeakGate.ps1` on the actual Windows repo to produce the authoritative build and smoke result.
+## Reproduce
+
+`tests/Run-PeakGate.ps1` runs build → self-test → smoke against a local image tag.
+The retired-set pull-back in the table is the Quickstart command in [`README.md`](README.md) with the retired tasks as input.

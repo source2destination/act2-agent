@@ -15,6 +15,16 @@
   <ItemGroup>
     <Compile Include="src/HarnessProgram.cs" />
     <Compile Include="src/Harness.cs" />
+    <Compile Include="src/Reduce.cs" />
+    <Compile Include="src/PeakPreprocess.cs" />
+    <Compile Include="src/PeakDeterministic.cs" />
+    <Compile Include="src/PeakCodeDebug.cs" />
+    <Compile Include="src/LocalTaskSupport.cs" />
+    <Compile Include="src/SummaryReducer.cs" />
+    <Compile Include="src/PeakSelfTest.cs" />
+    <Compile Include="src/Solvers.cs" />
+    <Compile Include="src/Solvers2.cs" />
+    <Compile Include="src/Comply.cs" />
     <Compile Include="src/Fireworks.cs" />
     <Compile Include="src/Backend.cs" />
     <Compile Include="src/Records.cs" />

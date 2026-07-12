@@ -1,0 +1,39 @@
+# ── R-ZERO Peak image: harness + llama-server + baked weights ────────────────
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+COPY act2-harness.csproj ./
+COPY src/ ./src/
+
+RUN dotnet publish act2-harness.csproj -c Release -o /app
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        wget \
+        libgomp1 \
+        python3-minimal \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /app /app
+
+COPY zero-parts/llama-server /opt/llama/llama-server
+COPY zero-parts/*.so* /opt/llama/
+
+ENV REMOTE_LANES=""
+ENV LD_LIBRARY_PATH=/opt/llama
+
+RUN chmod +x /opt/llama/llama-server
+
+COPY zero-parts/model.gguf /models/model.gguf
+
+COPY zero/entrypoint-zero.sh /entrypoint-zero.sh
+RUN chmod +x /entrypoint-zero.sh
+
+LABEL build="routezero-peak-v1"
+
+WORKDIR /data
+ENTRYPOINT ["/entrypoint-zero.sh"]
+
+CMD ["harness", "--local-fallback", "--comply", "--lean-prompts", "--normalize-input"]

@@ -21,7 +21,10 @@ public sealed class FireworksBackend : IEnsembleBackend
     // invalidates the run. Never hardcode around this.
     private readonly string _root;
     private readonly HttpClient _http;
-    private readonly string? _reasoningEffort;   // "low"|"medium"|"high"|null
+    private readonly string? _reasoningEffort;   // "none" suppresses hidden reasoning on the proxy
+    // models that rejected reasoning_effort with invalid_request_error — stop sending it to them
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _noEffortSet = new();
+    private static System.Collections.Generic.ICollection<string> _noEffortParam => _noEffortSet.Keys;
 
     public FireworksBackend(string? apiKey = null, string? reasoningEffort = null, string? baseUrl = null)
     {
@@ -34,6 +37,23 @@ public sealed class FireworksBackend : IEnsembleBackend
         _reasoningEffort = reasoningEffort;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        // CRITICAL — WIRE COMPATIBILITY WITH MINIMAL PROXIES:
+        // PostAsJsonAsync streams the body as Transfer-Encoding: chunked (no
+        // Content-Length). Python's OpenAI SDK and Go's net/http send fixed-length
+        // bodies. Minimal judging proxies/gateways commonly reject or mangle
+        // chunked request bodies — our own test proxy did exactly that. Every
+        // call therefore goes out as pre-serialized StringContent (which sets
+        // Content-Length), and Expect: 100-continue is disabled (another
+        // handshake minimal proxies fumble). See PostJson below.
+        _http.DefaultRequestHeaders.ExpectContinue = false;
+    }
+
+    // Fixed-length JSON POST: serialize first, send with Content-Length.
+    private Task<HttpResponseMessage> PostJson(string url, object payload, CancellationToken ct)
+    {
+        string json = JsonSerializer.Serialize(payload);
+        var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        return _http.PostAsync(url, content, ct);
     }
 
     public async Task<string[]> ListModelsAsync(CancellationToken ct)
@@ -57,8 +77,17 @@ public sealed class FireworksBackend : IEnsembleBackend
         PromptRow row, string model, string? systemPrompt, int topLogprobs, int maxTokens, double temperature, CancellationToken ct)
     {
         var messages = new List<object>();
-        if (!string.IsNullOrEmpty(systemPrompt)) messages.Add(new { role = "system", content = systemPrompt });
-        messages.Add(new { role = "user", content = row.Prompt });
+        // Gemma-family endpoints reject or silently ignore the system role -
+        // fold the instruction into the user turn for those models so the lane
+        // prompt actually reaches them. Everyone else gets a proper system msg.
+        bool foldSystem = model.Contains("gemma", StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrEmpty(systemPrompt) && foldSystem)
+            messages.Add(new { role = "user", content = systemPrompt + "\n\n" + row.Prompt });
+        else
+        {
+            if (!string.IsNullOrEmpty(systemPrompt)) messages.Add(new { role = "system", content = systemPrompt });
+            messages.Add(new { role = "user", content = row.Prompt });
+        }
         var payload = new Dictionary<string, object?>
         {
             ["model"] = model,
@@ -66,18 +95,62 @@ public sealed class FireworksBackend : IEnsembleBackend
             ["temperature"] = temperature,
             ["max_tokens"] = maxTokens,
         };
-        // reasoning suppression for gpt-oss/reasoning-class models: remote output
-        // tokens are the SCORED spend, so remote thinking is directly score-negative.
-        if (_reasoningEffort != null) payload["reasoning_effort"] = _reasoningEffort;
+        // reasoning suppression — CRITICAL: every model in the real ALLOWED_MODELS
+        // list (gemma-4, minimax, kimi) is a REASONING model. Reasoning tokens are
+        // billed as completion_tokens (SCORED spend) AND consume the max_tokens
+        // budget before the answer is emitted — unsuppressed, a small cap yields a
+        // truncated/empty answer (the gate-failure signature). We send multiple
+        // suppression signals; OpenAI-compatible servers ignore unknown fields.
+        // Reasoning suppression across model families, which disagree on the param:
+        //   gpt-oss:     reasoning_effort = "low"|"medium"|"high"
+        //   gemma-4:     reasoning = "on"|"off"   (rejects "low" -> falls back to ON!)
+        //   qwen/others: chat_template_kwargs.enable_thinking = false
+        // Send all three; OpenAI-compatible servers ignore unrecognized fields.
+        // _reasoningEffort carries the gpt-oss scale value; "off"/false suppress the rest.
+        // reasoning_effort:"none" — the value that works on the judging proxy.
+        // Reasoning models (minimax-m3 etc.) burn the whole budget on hidden
+        // reasoning and return BLANK content; "none" suppresses it. Models that
+        // reject the param get an automatic bare retry (see catch below) and are
+        // remembered so we stop sending it to them.
+        bool sendEffort = _reasoningEffort != null && !_noEffortParam.Contains(model);
+        if (sendEffort) payload["reasoning_effort"] = _reasoningEffort;
 
         var sw = Stopwatch.StartNew();
         try
         {
-            using var res = await _http.PostAsJsonAsync(_root + "/chat/completions", payload, ct);
-            var json = await res.Content.ReadAsStringAsync(ct);
-            sw.Stop();
-            if (!res.IsSuccessStatusCode)
-                return Fail(row, model, sw.Elapsed.TotalMilliseconds, $"fireworks {(int)res.StatusCode}: {Clip(json)}");
+            HttpResponseMessage res = null!;
+            string json = "";
+            // Official-pattern backoff: up to 3 attempts, 2s/4s spacing, survives
+            // proxy rate limits and transient 5xx. Cancellation (per-task budget)
+            // still aborts cleanly between attempts.
+            for (int attempt = 0; ; attempt++)
+            {
+                res?.Dispose();
+                res = await PostJson(_root + "/chat/completions", payload, ct);
+                json = await res.Content.ReadAsStringAsync(ct);
+                if (res.IsSuccessStatusCode || attempt >= 2) break;
+                int code = (int)res.StatusCode;
+                if (code == 429 || code >= 500)
+                { try { await Task.Delay(TimeSpan.FromSeconds(2 * (attempt + 1)), ct); } catch { break; } continue; }
+                break;   // 4xx other than 429: not retryable
+            }
+            if (!res.IsSuccessStatusCode && sendEffort && json.Contains("invalid_request_error"))
+            {
+                // model rejects reasoning_effort: remember, retry bare
+                _noEffortSet.TryAdd(model, 0);
+                payload.Remove("reasoning_effort");
+                using var res2 = await PostJson(_root + "/chat/completions", payload, ct);
+                json = await res2.Content.ReadAsStringAsync(ct);
+                sw.Stop();
+                if (!res2.IsSuccessStatusCode)
+                    return Fail(row, model, sw.Elapsed.TotalMilliseconds, $"fireworks {(int)res2.StatusCode}: {Clip(json)}");
+            }
+            else
+            {
+                sw.Stop();
+                if (!res.IsSuccessStatusCode)
+                    return Fail(row, model, sw.Elapsed.TotalMilliseconds, $"fireworks {(int)res.StatusCode}: {Clip(json)}");
+            }
 
             using var doc = JsonDocument.Parse(json);
             var r = doc.RootElement;
@@ -85,6 +158,16 @@ public sealed class FireworksBackend : IEnsembleBackend
             string answer = choice.TryGetProperty("message", out var msg)
                 && msg.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String
                 ? c.GetString() ?? "" : "";
+            // Fallback: if the server split reasoning into a separate field and the
+            // answer came back empty (model spent its budget thinking), salvage the
+            // reasoning tail so the row isn't blank. Suppression should prevent this,
+            // but on servers that ignore the suppression flags this avoids a zero.
+            if (answer.Trim().Length == 0 && msg.ValueKind == JsonValueKind.Object
+                && msg.TryGetProperty("reasoning_content", out var rc) && rc.ValueKind == JsonValueKind.String)
+            {
+                string rcs = rc.GetString() ?? "";
+                if (rcs.Length > 0) answer = rcs.Length > 1200 ? rcs[^1200..] : rcs;
+            }
             string? finish = choice.TryGetProperty("finish_reason", out var fr) && fr.ValueKind == JsonValueKind.String
                 ? fr.GetString() : null;
             int? pt = null, ctk = null;
