@@ -427,3 +427,8 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# RouteZero: runtime payload fetched by zero/get-zero-parts.ps1, never committed
+zero-parts/*
+!zero-parts/ARCHIVE-NOTE.txt
+*.gguf

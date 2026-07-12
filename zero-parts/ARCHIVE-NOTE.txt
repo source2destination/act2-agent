@@ -1,0 +1,2 @@
+This review archive intentionally omits only model.gguf because it is ~2 GB.
+The actual project repo already contains zero-parts/model.gguf; keep that file in place.
