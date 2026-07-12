@@ -53,12 +53,12 @@ Lane details, promotion gates, and build steps: [`PEAK_BUILD.md`](PEAK_BUILD.md)
 Run the exact graded artifact:
 
 ```powershell
-docker run --rm --cpus=2 --memory=4g `
-  -v <your-input-dir>:/input:ro `
-  -v <your-output-dir>:/output `
-  -e FIREWORKS_API_KEY=$env:FIREWORKS_API_KEY `
-  -e FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1 `
-  -e ALLOWED_MODELS=accounts/fireworks/models/minimax-m3,accounts/fireworks/models/kimi-k2p7-code `
+docker run --rm --cpus=2 --memory=4g \
+  -v <your-input-dir>:/input:ro \
+  -v <your-output-dir>:/output \
+  -e FIREWORKS_API_KEY=<your_key> \
+  -e FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1 \
+  -e ALLOWED_MODELS=accounts/fireworks/models/minimax-m3,accounts/fireworks/models/kimi-k2p7-code \
   ghcr.io/source2destination/act2-agent:v3
 ```
 
